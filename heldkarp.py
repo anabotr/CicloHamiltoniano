@@ -1,19 +1,3 @@
-#!/usr/bin/env python3
-"""
-hamilton_heldkarp.py
-
-Held-Karp (bitmask DP) experimental harness:
- - generate Erdos-Renyi graphs (reproducible via seed)
- - run Held-Karp in a subprocess (external timeout enforced)
- - high-precision timing (perf_counter_ns)
- - save results to CSV and produce plots (same format as backtracking harness)
-
-Fields in CSV:
- run_idx, graph_idx, rep, n, p, avg_degree, time_s, found, timed_out, rec_calls
-
-Author: generated for Ana Beatriz
-"""
-
 import argparse
 import csv
 import random
@@ -25,11 +9,7 @@ import multiprocessing
 import math
 import matplotlib.pyplot as plt
 
-# -------------------------
-# Graph utilities
-# -------------------------
 def erdos_renyi_adj(n: int, p: float, rnd: random.Random) -> Dict[int, Set[int]]:
-    """Generate adjacency dict for G(n,p) using provided RNG."""
     G = {i: set() for i in range(n)}
     for i in range(n):
         for j in range(i + 1, n):
@@ -45,75 +25,46 @@ def average_degree(G: Dict[int, Set[int]]) -> float:
     return sum(len(nei) for nei in G.values()) / float(n)
 
 
-# -------------------------
-# Held-Karp implementation (in-process)
-# -------------------------
+
 def held_karp_inprocess(G: Dict[int, Set[int]], start: int = 0) -> Tuple[Optional[List[int]], int]:
-    """
-    Held-Karp for unweighted graphs: treat edge cost 1 for existing edges,
-    inf for non-edges. Returns (path list if Hamiltonian cycle exists else None, rec_calls).
-    rec_calls counts DP updates (an indicator of work).
-    """
     n = len(G)
-    # quick checks
     if n == 0:
         return None, 0
-    # if any isolated vertex, no Hamiltonian cycle
     for v in range(n):
         if len(G[v]) == 0:
             return None, 0
-
     INF = 10**9
-    # Map cost: cost[u][v] = 1 if edge exists else INF
     cost = [[INF] * n for _ in range(n)]
     for u in range(n):
         cost[u][u] = 0
         for v in G[u]:
             cost[u][v] = 1
-
-    # DP: dp[mask][v] = min cost to start at start, visit vertices in mask (mask includes v), end at v
-    # represent dp as dict mapping (mask << n) + v -> cost to save memory, or use list of dicts
-    # But for speed and clarity, use list of dicts indexed by mask: each is array size n; masks go 0..(1<<n)-1
-    # Memory: n * 2^n entries
     max_mask = 1 << n
-    # initialize dp with INF
-    # We'll allocate dp as list of lists of floats to be fastest, but be mindful of memory.
-    # For n up to ~20 this is OK.
     try:
         dp = [ [INF] * n for _ in range(max_mask) ]
         parent = [ [-1] * n for _ in range(max_mask) ]
     except MemoryError:
-        # if n too large to allocate, bail out
         return None, 0
 
-    # initialize base cases: paths that start at start and go to v directly (mask with v only)
-    # but classic Held-Karp omits start in masks; we'll keep mask indicating subset of all vertices including start.
-    # For uniformity, set dp[1<<start][start] = 0
     dp[1 << start][start] = 0
 
     rec_calls = 0
 
-    # iterate masks
     for mask in range(max_mask):
-        # skip masks that don't include start
         if not (mask & (1 << start)):
             continue
-        # for each v in mask with dp defined
         for v in range(n):
             if not (mask & (1 << v)):
                 continue
             cur = dp[mask][v]
             if cur >= INF:
                 continue
-            # try extend to u not in mask
             not_mask = (~mask) & (max_mask - 1)
             u = not_mask & -not_mask
-            # iterate u by bit scanning
             m = not_mask
             while m:
                 lb = m & -m
                 u_idx = (lb.bit_length() - 1)
-                # relax
                 new_mask = mask | lb
                 new_cost = cur + cost[v][u_idx]
                 if new_cost < dp[new_mask][u_idx]:
@@ -125,7 +76,6 @@ def held_karp_inprocess(G: Dict[int, Set[int]], start: int = 0) -> Tuple[Optiona
     full_mask = (1 << n) - 1
     best_cost = INF
     last = -1
-    # find best end k such that there is edge from k to start to close cycle
     for k in range(n):
         if k == start:
             continue
@@ -135,10 +85,8 @@ def held_karp_inprocess(G: Dict[int, Set[int]], start: int = 0) -> Tuple[Optiona
             last = k
 
     if best_cost >= INF:
-        # no Hamiltonian cycle
         return None, rec_calls
 
-    # reconstruct path: from full_mask, last
     path = []
     mask = full_mask
     v = last
@@ -148,24 +96,15 @@ def held_karp_inprocess(G: Dict[int, Set[int]], start: int = 0) -> Tuple[Optiona
         mask = mask & ~(1 << v)
         v = pv
     path.append(start)
-    path.reverse()  # path from start .. last .. start? ensure cycle representation
-    # ensure it is a full path covering n vertices; if length less than n+1, reconstruct differently
-    # In some parent reconstructions, start may appear twice; ensure we return a Hamiltonian cycle list of n vertices (order)
-    # Return the cycle as sequence of n vertices starting at start (without returning start again)
+    path.reverse()
     cycle = path[:-1] if path and path[-1] == start else path
     if len(cycle) != n:
-        # fallback: attempt another reconstruction by walking parents
-        # (this is unlikely when DP was filled correctly)
         pass
 
     return cycle, rec_calls
 
 
-# -------------------------
-# Worker + subprocess wrapper (external timeout)
-# -------------------------
 def __hk_worker(G, start, q):
-    """Worker for Held-Karp to be run in subprocess. No time_limit here; parent enforces timeout."""
     try:
         path, rec_calls = held_karp_inprocess(G, start=start)
         q.put(("ok", path, rec_calls))
@@ -173,10 +112,6 @@ def __hk_worker(G, start, q):
         q.put(("err", repr(e)))
 
 def run_hk_in_subprocess(G: Dict[int, Set[int]], start: int, time_limit: float) -> Tuple[Optional[List[int]], bool, int, float]:
-    """
-    Run Held-Karp in subprocess and enforce external timeout.
-    Returns (path_or_None, timed_out_bool, rec_calls_or_-1, elapsed_seconds)
-    """
     q = multiprocessing.Queue()
     p = multiprocessing.Process(target=__hk_worker, args=(G, start, q))
     t0 = time.perf_counter_ns()
@@ -205,9 +140,6 @@ def run_hk_in_subprocess(G: Dict[int, Set[int]], start: int, time_limit: float) 
         return None, False, -1, elapsed
 
 
-# -------------------------
-# Experiment harness (same CSV fields and plots as backtracking harness)
-# -------------------------
 def parse_list_arg(s: Optional[str]):
     if s is None:
         return None
@@ -260,7 +192,6 @@ def run_experiments(
             G = erdos_renyi_adj(n, p, random.Random(graph_seed))
             avg_deg = average_degree(G)
 
-            # Run Held-Karp in subprocess with external timeout
             path, timed_out, rec_calls, elapsed_s = run_hk_in_subprocess(G, start=0, time_limit=time_limit)
 
             found = path is not None
@@ -284,7 +215,6 @@ def run_experiments(
 
             run_idx += 1
 
-    # save CSV
     fieldnames = ["run_idx","graph_idx","rep","n","p","avg_degree",
                   "time_s","found","timed_out","rec_calls"]
     try:
@@ -298,7 +228,6 @@ def run_experiments(
     except Exception as e:
         print("Failed to save CSV:", e)
 
-    # plotting
     if make_plots:
         try:
             xs_found = [r["avg_degree"] for r in results if r["found"]]
@@ -347,9 +276,6 @@ def run_experiments(
 
     return results
 
-# -------------------------
-# CLI
-# -------------------------
 def main(argv):
     parser = argparse.ArgumentParser(description="Held-Karp experiments (Hamiltonian cycle detection via DP)")
     parser.add_argument("--num_graphs", type=int, default=100)

@@ -1,18 +1,3 @@
-#!/usr/bin/env python3
-
-"""
-hamilton_experiment_palmer.py
-
-Experimental harness for finding Hamiltonian cycles using the Palmer (Criss-Cross) algorithm.
-
-- automatic generation of graphs (random n and p, reproducible via seed)
-- external timeout using multiprocessing (safe, guaranteed stop)
-- multiple repetitions and saving to CSV
-- plotting (scatter time vs avg degree, boxplot time by n)
-
-Author: generated for Ana Beatriz
-"""
-
 import argparse
 import csv
 import random
@@ -21,11 +6,6 @@ import sys
 from typing import Dict, Set, List, Optional, Tuple
 import multiprocessing
 import matplotlib.pyplot as plt
-
-
-# -------------------------
-# Graph utilities
-# -------------------------
 
 def erdos_renyi_adj(n: int, p: float, rnd: random.Random) -> Dict[int, Set[int]]:
     G = {i: set() for i in range(n)}
@@ -42,10 +22,6 @@ def average_degree(G: Dict[int, Set[int]]) -> float:
         return 0.0
     return sum(len(nei) for nei in G.values()) / len(G)
 
-
-# -------------------------
-# DFS-based heuristic (optional)
-# -------------------------
 
 def dfs_longest_path(G: Dict[int, Set[int]]) -> List[int]:
     n = len(G)
@@ -74,11 +50,6 @@ def dfs_longest_path(G: Dict[int, Set[int]]) -> List[int]:
         best.extend(remaining)
 
     return best
-
-
-# -------------------------
-# Palmer Criss-Cross algorithm
-# -------------------------
 
 class PalmerCrissCross:
     def __init__(self, G: Dict[int, Set[int]], init_by_dfs=True, time_limit=5.0):
@@ -185,10 +156,6 @@ class PalmerCrissCross:
                 return None, False
 
 
-# -------------------------
-# Worker for subprocess
-# -------------------------
-
 def solver_process_worker(G, time_limit, q, init_by_dfs_flag):
     try:
         solver = PalmerCrissCross(G, init_by_dfs=init_by_dfs_flag, time_limit=time_limit)
@@ -226,10 +193,6 @@ def run_solver_in_subprocess(G, time_limit, init_by_dfs_flag):
     else:
         return None, False, -1, elapsed
 
-
-# -------------------------
-# Experiment harness
-# -------------------------
 
 def parse_list_arg(s):
     if s is None:
@@ -369,10 +332,6 @@ def run_experiments(
 
     return results
 
-
-# -------------------------
-# CLI
-# -------------------------
 
 def main(argv):
     parser = argparse.ArgumentParser(description="Hamiltonian experiments using Palmer Criss-Cross")

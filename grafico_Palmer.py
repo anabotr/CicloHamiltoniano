@@ -34,5 +34,4 @@ def plot_algorithm(filename, title, output_name):
     plt.show()
 
 
-# --- Exemplo de uso ---
 plot_algorithm("results_palmer_20.csv", "Palmer", "grafico_palmer_unico.png")
